@@ -443,6 +443,86 @@ void git_show_current_changes(
   }
 }
 
+// /* use git command to get line changes */
+// void calculate_line_change_git_cmd(
+//     std::string relative_file_path, std::string git_directory,
+//     std::map<std::string, std::map<unsigned int, double>> &file2line2change_map,
+//     unsigned short change_sig) {
+
+//   std::ostringstream cmd;
+//   std::string str_cur_commit_sha;
+//   char ch_cur_commit_sha[128];
+//   int rc = 0;
+//   FILE *fp;
+//   std::set<unsigned int> changed_lines_cur_commit;
+//   std::map<unsigned int, unsigned int> lines2changes;
+//   std::map<unsigned int, double> tmp_line2changes;
+
+//   // get the commits that change the file of relative_file_path
+//   // result: commit short SHAs
+//   // TODO: If the file name changed, it cannot get the changed lines.
+//   //  --since=10.years
+//   char *ch_month = getenv("AFLCHURN_SINCE_MONTHS");
+//   if (ch_month) {
+//     std::string since_month(ch_month);
+//     if (since_month.find_first_not_of("0123456789") ==
+//         std::string::npos) { // all digits
+
+//       cmd << "cd " << git_directory << " && git log --since=" << ch_month
+//           << ".months"
+//           << " --follow --oneline --format=\"%h\" -- " << relative_file_path
+//           << " | grep -Po \"^[0-9a-f]*$\"";
+
+//     } else {
+//       ch_month = NULL; // if env variable is not digits, use all commits
+//     }
+//   }
+
+//   if (!ch_month) {
+
+//     cmd << "cd " << git_directory << " && git log"
+//         << " --follow --oneline --format=\"%h\" -- " << relative_file_path
+//         << " | grep -Po \"^[0-9a-f]*$\"";
+//   }
+
+//   fp = popen(cmd.str().c_str(), "r");
+//   if (NULL == fp)
+//     return;
+//   /* get lines2changes: git log -> git show -> git diff
+//     "git log -- filename": get commits SHAs changing the file
+//     "git show $commit_sha -- filename": get changed lines in current commit
+//     "git diff $commit_sha HEAD -- filename": get the related lines in HEAD
+//     commit
+//     */
+//   while (fscanf(fp, "%s", ch_cur_commit_sha) == 1) {
+//     str_cur_commit_sha.clear();
+//     str_cur_commit_sha.assign(ch_cur_commit_sha);
+//     // get changed_lines_cur_commit: the change lines in current commit
+//     changed_lines_cur_commit.clear();
+//     git_show_current_changes(str_cur_commit_sha, git_directory, // retrive lines changed in cur commit
+//                              relative_file_path, changed_lines_cur_commit);
+//     // get lines2changes: related change lines in HEAD commit
+//     git_diff_current_head(str_cur_commit_sha, git_directory, relative_file_path, // lines in HEAD commit that are related to changes  in cur_conit
+//                           changed_lines_cur_commit, lines2changes);
+//   }
+
+//   /* Get changes */
+//   if (!lines2changes.empty()) {
+//     // logchanges
+//     // <key: line number, value: number of changes of that line>
+//     for (auto l2c : lines2changes) {
+//       tmp_line2changes[l2c.first] = inst_norm_change(l2c.second, change_sig);
+//     }
+
+//     file2line2change_map[relative_file_path] = tmp_line2changes;
+//   }
+
+//   rc = pclose(fp);
+//   if (-1 == rc) {
+//     printf("git log pclose() fails\n");
+//   }
+// }
+
 /* use git command to get line changes */
 void calculate_line_change_git_cmd(
     std::string relative_file_path, std::string git_directory,
@@ -458,32 +538,37 @@ void calculate_line_change_git_cmd(
   std::map<unsigned int, unsigned int> lines2changes;
   std::map<unsigned int, double> tmp_line2changes;
 
-  // get the commits that change the file of relative_file_path
-  // result: commit short SHAs
-  // TODO: If the file name changed, it cannot get the changed lines.
-  //  --since=10.years
-  char *ch_month = getenv("AFLCHURN_SINCE_MONTHS");
-  if (ch_month) {
-    std::string since_month(ch_month);
-    if (since_month.find_first_not_of("0123456789") ==
-        std::string::npos) { // all digits
+  // SPUPDATE 8
+  // Get the total number of commits for the file
+  cmd << "cd " << git_directory 
+      << " && git rev-list --count HEAD -- " << relative_file_path;
 
-      cmd << "cd " << git_directory << " && git log --since=" << ch_month
-          << ".months"
-          << " --follow --oneline --format=\"%h\" -- " << relative_file_path
-          << " | grep -Po \"^[0-9a-f]*$\"";
+  fp = popen(cmd.str().c_str(), "r");
+  if(NULL == fp) return;
+  unsigned int total_commits;
+  if(fscanf(fp, "%u", &total_commits) != 1) {
+    pclose(fp);
+    return; // Handle error appropriately
+  }
+  pclose(fp);
 
-    } else {
-      ch_month = NULL; // if env variable is not digits, use all commits
-    }
+  // Determine the number of commits to analyze
+  unsigned int commits_to_analyze = total_commits;
+  if(total_commits <= 3333) {
+    commits_to_analyze = static_cast<unsigned int>(total_commits * 0.15);
+  } else {
+    commits_to_analyze = 500; // Cap at 500 for large histories
   }
 
-  if (!ch_month) {
+  // Clear the command stream to build the new command
+  cmd.str("");
+  cmd.clear();
 
-    cmd << "cd " << git_directory << " && git log"
-        << " --follow --oneline --format=\"%h\" -- " << relative_file_path
-        << " | grep -Po \"^[0-9a-f]*$\"";
-  }
+  // Construct Git log command based on the commits_to_analyze
+  cmd << "cd " << git_directory
+      << " && git log -n " << commits_to_analyze
+      << " --oneline --format=\"%h\" -- "
+      << relative_file_path << " | grep -Po \"^[0-9a-f]*$\"";
 
   fp = popen(cmd.str().c_str(), "r");
   if (NULL == fp)
